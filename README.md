@@ -51,27 +51,42 @@
 
 ---
 
-## 🚀 Quickstart
+## 🚀 Quickstart: Run Without Setup Friction
 
-### Prerequisites
-* **Node.js** >= 18
-* Web3 wallet (**MetaMask** / **Rabby**) on Monad Testnet (`10143`)
-* Testnet MON from [faucet.monad.xyz](https://faucet.monad.xyz)
+### 1. Configure Wallet (MetaMask / Rabby)
+Add Monad Testnet manually or via [docs.monad.xyz](https://docs.monad.xyz):
+* **Network Name**: `Monad Testnet`
+* **RPC URL**: `https://testnet-rpc.monad.xyz`
+* **Chain ID**: `10143`
+* **Currency Symbol**: `MON`
+* **Explorer URL**: `https://testnet.monadscan.com`
+* **Faucet**: Claim testnet MON at [faucet.monad.xyz](https://faucet.monad.xyz)
 
-### Run
+### 2. Run the App
 ```bash
-# 1. Clone & enter repository
+# Clone repository
 git clone https://github.com/Krishna009-pro/FlowPay.git
 cd FlowPay
 
-# 2. Install dependencies
+# Install dependencies
 npm install
 
-# 3. Start local server
-npm start
+# Start local dev server (works with npm start or npm run dev)
+npm run dev
 ```
 
-App loads at: **`http://localhost:5173`**
+Open **`http://localhost:5173`** in your browser.
+
+### 3. Build & Verify Smart Contract (Foundry)
+```bash
+# Build contract
+forge build
+
+# Deploy to Monad Testnet
+forge script contracts/script/DeployFlowPay.s.sol:DeployFlowPay \
+  --rpc-url https://testnet-rpc.monad.xyz \
+  --broadcast
+```
 
 ---
 
