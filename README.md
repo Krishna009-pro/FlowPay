@@ -11,6 +11,7 @@ This is a hackathon project currently connected to a **Monad Testnet** contract.
 | **Project name** | FlowPay |
 | **Description** | Salary streams on Monad, with real-time earnings and an optional savings reserve. |
 | **Live demo** | [flowpay-lake.vercel.app](https://flowpay-lake.vercel.app/) |
+| **Project post** | [View FlowPay on X](https://x.com/VaishnaviBubnx/status/2108897030353637518) |
 | **Contract** | [`0xe0bB03BdE17a457C8e9e07581B05056eEe321931`](https://testnet.monadscan.com/address/0xe0bB03BdE17a457C8e9e07581B05056eEe321931) |
 | **Network** | Monad Testnet · Chain ID `10143` |
 | **Deployment block** | `69796334` |
