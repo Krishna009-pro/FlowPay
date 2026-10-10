@@ -1,111 +1,63 @@
-# FlowPay ⚡ — High-Frequency Payroll on Monad
+# FlowPay
 
-> **Real-time, per-second salary streaming protocol with automated micro-savings.**  
-> Built for the **Monad Hackathon** (Consumer Payments & On-Chain Finance).
+FlowPay lets employers stream salary in native MON on Monad Testnet. Employees can watch vested pay accrue, claim it when they need it, and reserve a share of future earnings as savings.
 
-[![Monad Testnet](https://img.shields.io/badge/Chain_ID-10143-8A2BE2?style=flat-square)](https://docs.monad.xyz)
-[![Block Time](https://img.shields.io/badge/Block_Time-300ms-blue?style=flat-square)](https://docs.monad.xyz)
-[![Throughput](https://img.shields.io/badge/Target_TPS-10%2C000-green?style=flat-square)](https://docs.monad.xyz)
-[![Gas Cost](https://img.shields.io/badge/Tx_Fee-%3C$0.001-orange?style=flat-square)](https://docs.monad.xyz)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.28-363636?style=flat-square)](https://soliditylang.org/)
+This is a hackathon project currently connected to a **Monad Testnet** contract. Hosting the website does not deploy a contract or move it to mainnet.
 
----
+## What works
 
-## 📊 Benchmark: Traditional Payroll vs. Ethereum vs. Monad
+- Employer creates and funds a salary stream from a connected wallet.
+- Employee sees the current on-chain stream state and can claim vested salary or savings.
+- Employer can add funding, pause a stream, and resume a paused stream.
+- Transaction links open on MonadScan.
 
-| Metric | Traditional Payroll (ACH) | Ethereum L1 | **FlowPay on Monad** |
-| :--- | :--- | :--- | :--- |
-| **Payment Frequency** | 15 – 30 days (batched) | Block-based (~12s) | **Per second (Real-Time)** |
-| **Settlement Time** | 2 – 5 business days | 12s – 15m (finality) | **300ms** (600ms finality) |
-| **Average Tx Fee** | $0.25 – $1.50 per batch | $2.00 – $15.00+ | **<$0.001** |
-| **Max Throughput** | Batch limited | 15 – 30 TPS | **10,000 TPS** |
-| **$10 Micro-Withdrawal** | ❌ Impossible | ❌ Negative ROI (Gas > Value) | **✅ Economical & Instant** |
-| **Custody & Solvency** | Centralized intermediary | Smart contract | **Non-Custodial Escrow** |
+Transactions are signed in the user's wallet. FlowPay does not need a server-side wallet key.
 
----
+## Run locally
 
-## ⚡ Core Protocol Parameters
+Requirements: Node.js and a wallet such as MetaMask.
 
-* **Accrual Basis**: Computed continuously on-chain via `ratePerSecond` ($\text{Wei} / \text{Second}$).
-* **Standard 30-Day Rate**: $3,200 \text{ MON/month} = \frac{3,200 \times 10^{18}}{2,592,000 \text{ s}} \approx 1.2345679 \times 10^{15} \text{ Wei/s}$.
-* **Auto-Savings Range**: **0% – 30%** in **5%** steps (`0` to `3,000 bps`).
-* **Vesting Invariant**: $\text{Gross Accrued} \le \text{Cumulative Deposits}$ (stops at underfunding).
-* **Solvency Protection**: Non-retroactive checkpoints on stream `pause`, `resume`, and `topUp`.
-* **Contract Limits**: Compiles under Solidity `0.8.28` (200 optimizer runs), well within Monad's **128 KB** code limit.
-
----
-
-## 🌐 Network Specifications
-
-| Parameter | Proven Value |
-| :--- | :--- |
-| **Network Name** | Monad Testnet |
-| **Chain ID** | `10143` (`0x279f`) |
-| **Native Token** | `MON` (18 Decimals) |
-| **Block Cadence** | `300ms` |
-| **RPC Endpoint** | `https://testnet-rpc.monad.xyz` |
-| **WebSocket** | `wss://testnet-rpc.monad.xyz` |
-| **Block Explorer** | [https://testnet.monadscan.com](https://testnet.monadscan.com) |
-| **Alternative Explorer** | [https://testnet.monadvision.com](https://testnet.monadvision.com) |
-| **Multicall3** | `0xcA11bde05977b3631167028862bE2a173976CA11` |
-
----
-
-## 🚀 Quickstart: Run Without Setup Friction
-
-### 1. Configure Wallet (MetaMask / Rabby)
-Add Monad Testnet manually or via [docs.monad.xyz](https://docs.monad.xyz):
-* **Network Name**: `Monad Testnet`
-* **RPC URL**: `https://testnet-rpc.monad.xyz`
-* **Chain ID**: `10143`
-* **Currency Symbol**: `MON`
-* **Explorer URL**: `https://testnet.monadscan.com`
-* **Faucet**: Claim testnet MON at [faucet.monad.xyz](https://faucet.monad.xyz)
-
-### 2. Run the App
 ```bash
-# Clone repository
 git clone https://github.com/Krishna009-pro/FlowPay.git
 cd FlowPay
-
-# Install dependencies
 npm install
+```
 
-# Start local dev server (works with npm start or npm run dev)
+Copy `.env.example` to `.env.local`, then run:
+
+```bash
 npm run dev
 ```
 
-Open **`http://localhost:5173`** in your browser.
+Open `http://localhost:5173`. Use MetaMask on Monad Testnet (chain ID `10143`) and test MON from the [Monad faucet](https://faucet.monad.xyz).
 
-### 3. Build & Verify Smart Contract (Foundry)
-```bash
-# Build contract
-forge build
+## Host on Vercel
 
-# Deploy to Monad Testnet
-forge script contracts/script/DeployFlowPay.s.sol:DeployFlowPay \
-  --rpc-url https://testnet-rpc.monad.xyz \
-  --broadcast
-```
+1. Import this GitHub repository into Vercel. Set the project root to the repository root.
+2. Use the Vite defaults: build command `npm run build`, output directory `dist`, and install command `npm install`.
+3. Add these environment variables in Vercel Project Settings for Production and Preview:
 
----
+   | Variable | Value for the current Monad Testnet deployment |
+   | --- | --- |
+   | `VITE_MONAD_RPC_URL` | `https://testnet-rpc.monad.xyz` |
+   | `VITE_MONAD_CHAIN_ID` | `10143` |
+   | `VITE_FLOWPAY_CONTRACT_ADDRESS` | `0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba` |
+   | `VITE_FLOWPAY_DEPLOYMENT_BLOCK` | `69808500` |
 
-## 🛠️ User Flows
+4. Deploy, then open the provided URL and connect a Monad Testnet wallet.
 
-* **Employee**:
-  * Real-time accrual clock updates every 1 second.
-  * Adjust auto-save partition (0%–30%).
-  * Withdraw liquid pay or separate savings reserve via native `MON` transfers.
-* **Employer**:
-  * Fund stream escrow in native `MON`.
-  * Track runway and accrued liabilities in real time.
-  * One-click stream controls: `pause`, `resume`, `topUp`.
+`vercel.json` includes the rewrite needed for direct links to this single-page React app. Redeploy after changing environment variables because Vite embeds `VITE_` values in the browser bundle.
 
----
+**Do not put a private key or seed phrase in Vercel settings, source files, or any `VITE_` variable.** `VITE_` values are public client-side configuration. The app asks MetaMask to sign transactions in the browser.
 
-## 🔗 Official Links
+## Network and contract
 
-* **Monad Developer Docs**: [https://docs.monad.xyz](https://docs.monad.xyz)
-* **Hackathon Notion**: [Monad Foundation Portal](https://monad-foundation.notion.site/3486367594f28050a188f3178fc61735?v=3486367594f281c291a6000cabf5ebd0)
-* **Testnet Faucet**: [https://faucet.monad.xyz](https://faucet.monad.xyz)
-* **MonadScan**: [https://testnet.monadscan.com](https://testnet.monadscan.com)
+- Network: Monad Testnet
+- Chain ID: `10143`
+- Native token: `MON`
+- RPC: `https://testnet-rpc.monad.xyz`
+- Explorer: [MonadScan Testnet](https://testnet.monadscan.com)
+- Current contract: [0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba](https://testnet.monadscan.com/address/0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba)
+- Deployment block: `69808500`
+
+The contract address and deployment block are public chain data. If the contract is redeployed, update both values in `.env.local` or the hosting provider's environment settings, then rebuild/redeploy the website.
