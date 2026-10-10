@@ -1,5 +1,7 @@
 # FlowPay End-to-End Demo Implementation Plan
 
+> **Superseded:** This earlier plan implements simulated-only interactions. Use the on-chain design and its implementation plan instead.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the FlowPay React demo with connected employer and employee flows, persistent simulated payroll state, and a distinctive payroll-product UI.

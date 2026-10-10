@@ -1,5 +1,7 @@
 # FlowPay End-to-End Demo Design
 
+> **Superseded:** This earlier design described simulated-only interactions. The approved real-transaction scope is now in `2026-10-10-flowpay-onchain-design.md`.
+
 ## Goal
 
 Turn the existing React/Vite salary dashboard into a complete, beginner-friendly hackathon demo. The core story is that an employer funds and controls a salary stream while an employee watches earned pay accrue, reserves a portion for savings, and withdraws available funds.
