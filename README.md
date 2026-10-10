@@ -1,8 +1,20 @@
 # FlowPay
 
-FlowPay lets employers stream salary in native MON on Monad Testnet. Employees can watch vested pay accrue, claim it when they need it, and reserve a share of future earnings as savings.
+FlowPay lets employers send salary as a steady stream of native MON on Monad Testnet. Employees can see their pay build up by the second, claim what they have earned, and set aside a share for savings.
 
 This is a hackathon project currently connected to a **Monad Testnet** contract. Hosting the website does not deploy a contract or move it to mainnet.
+
+## Project info
+
+| | |
+| --- | --- |
+| **Project name** | FlowPay |
+| **Description** | Salary streams on Monad, with real-time earnings and an optional savings reserve. |
+| **Live demo** | [flowpay-lake.vercel.app](https://flowpay-lake.vercel.app/) |
+| **Contract** | [`0xe0bB03BdE17a457C8e9e07581B05056eEe321931`](https://testnet.monadscan.com/address/0xe0bB03BdE17a457C8e9e07581B05056eEe321931) |
+| **Network** | Monad Testnet · Chain ID `10143` |
+| **Deployment block** | `69796334` |
+| **Event** | Monad Blitz Pune V3 |
 
 ## What works
 
@@ -41,8 +53,8 @@ Open `http://localhost:5173`. Use MetaMask on Monad Testnet (chain ID `10143`) a
    | --- | --- |
    | `VITE_MONAD_RPC_URL` | `https://testnet-rpc.monad.xyz` |
    | `VITE_MONAD_CHAIN_ID` | `10143` |
-   | `VITE_FLOWPAY_CONTRACT_ADDRESS` | `0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba` |
-   | `VITE_FLOWPAY_DEPLOYMENT_BLOCK` | `69808500` |
+   | `VITE_FLOWPAY_CONTRACT_ADDRESS` | `0xe0bB03BdE17a457C8e9e07581B05056eEe321931` |
+   | `VITE_FLOWPAY_DEPLOYMENT_BLOCK` | `69796334` |
 
 4. Deploy, then open the provided URL and connect a Monad Testnet wallet.
 
@@ -57,7 +69,7 @@ Open `http://localhost:5173`. Use MetaMask on Monad Testnet (chain ID `10143`) a
 - Native token: `MON`
 - RPC: `https://testnet-rpc.monad.xyz`
 - Explorer: [MonadScan Testnet](https://testnet.monadscan.com)
-- Current contract: [0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba](https://testnet.monadscan.com/address/0xC8AAc9B5AE25834AA9e7198C8e8253776f61b6Ba)
-- Deployment block: `69808500`
+- Current contract: [0xe0bB03BdE17a457C8e9e07581B05056eEe321931](https://testnet.monadscan.com/address/0xe0bB03BdE17a457C8e9e07581B05056eEe321931)
+- Deployment block: `69796334`
 
 The contract address and deployment block are public chain data. If the contract is redeployed, update both values in `.env.local` or the hosting provider's environment settings, then rebuild/redeploy the website.
