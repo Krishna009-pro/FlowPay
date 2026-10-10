@@ -1,0 +1,9 @@
+{
+  "contract": "FlowPay",
+  "address": "0x104bd16f08c0af7c8a02a8971495f0d7793594ac",
+  "employer": "0xcd4dA261b49712f46247622B2707C9a738F9d155",
+  "chainId": 10143,
+  "deploymentBlock": 69796334,
+  "txHash": "0x6c41bdffa5cfbe259a23c2a9d0f20ba7fde138ff21d4a8ec3ea10b873ea8e3d5",
+  "deployedAt": "2026-10-10T10:02:47.440Z"
+}
