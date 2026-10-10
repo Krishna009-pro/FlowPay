@@ -104,61 +104,26 @@ FlowPay is built and configured for the official **Monad Testnet**:
 
 ---
 
-## 🚀 Getting Started: How to Run the Project
-
-Follow these steps to run FlowPay locally on your machine in under two minutes.
+## 🚀 Quickstart
 
 ### Prerequisites
-1. **Node.js** (v18.x or v20.x recommended)
-2. **npm** (comes with Node.js)
-3. A Web3 browser wallet (e.g. **MetaMask** or **Rabby**) connected to **Monad Testnet**.
-   * Need testnet MON? Get some from the [Official Monad Faucet](https://faucet.monad.xyz).
+* **Node.js** (v18+) & **npm**
+* Web3 browser wallet (**MetaMask** / **Rabby**) on [Monad Testnet](https://docs.monad.xyz) (Testnet MON available at [faucet.monad.xyz](https://faucet.monad.xyz))
 
----
-
-### Step 1: Clone and Navigate to the Project
+### Run Locally
 ```bash
+# 1. Clone & enter repository
 git clone https://github.com/Krishna009-pro/FlowPay.git
 cd FlowPay
-```
-*(If working inside this workspace directly, make sure you are in the project folder).*
 
----
-
-### Step 2: Install Dependencies
-```bash
+# 2. Install dependencies
 npm install
-```
-This installs the required packages: `react`, `react-dom`, `vite`, `lucide-react`, and `viem`.
 
----
-
-### Step 3: Configure Environment Variables (Optional for Local Demo)
-Copy the example environment configuration:
-```bash
-cp .env.example .env
-```
-Default public values:
-```env
-VITE_MONAD_RPC_URL=https://testnet-rpc.monad.xyz
-VITE_MONAD_CHAIN_ID=10143
-VITE_FLOWPAY_CONTRACT_ADDRESS=0xYourDeployedContractAddress
-VITE_FLOWPAY_DEPLOYMENT_BLOCK=0
-```
-> **Security Note:** Never put private keys or mnemonic seed phrases into your `.env` or frontend files. All user interactions are signed through the user's browser wallet (EIP-1193).
-
----
-
-### Step 4: Start the Local Development Server
-```bash
+# 3. Launch application
 npm start
 ```
-*Alternatively, you can run `npx vite`.*
 
-Once started, open your browser and navigate to:
-```text
-http://localhost:5173
-```
+Open **`http://localhost:5173`** in your browser.
 
 ---
 
