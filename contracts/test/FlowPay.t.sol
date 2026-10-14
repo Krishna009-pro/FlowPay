@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {FlowPay} from "../src/FlowPay.sol";
+import {FlowPayCore} from "../src/FlowPayCore.sol";
 
 interface Vm {
     function warp(uint256 timestamp) external;
@@ -32,21 +33,21 @@ contract FlowPayTest {
     }
 
     function testOnlyEmployerCanCreateAndInvalidInputsRevert() public {
-        vm.expectRevert(FlowPay.Unauthorized.selector);
+        vm.expectRevert(FlowPayCore.Unauthorized.selector);
         vm.prank(outsider);
         flowPay.createStream{value: 2 ether}(employee, 1 ether);
 
-        vm.expectRevert(FlowPay.InvalidEmployee.selector);
+        vm.expectRevert(FlowPayCore.InvalidEmployee.selector);
         flowPay.createStream{value: 2 ether}(address(this), 1 ether);
 
-        vm.expectRevert(FlowPay.InvalidRate.selector);
+        vm.expectRevert(FlowPayCore.InvalidRate.selector);
         flowPay.createStream{value: 2 ether}(employee, 0);
 
-        vm.expectRevert(FlowPay.InvalidDeposit.selector);
+        vm.expectRevert(FlowPayCore.InvalidDeposit.selector);
         flowPay.createStream(employee, 1 ether);
 
         _createStream(2 ether, 1 ether);
-        vm.expectRevert(FlowPay.StreamAlreadyCreated.selector);
+        vm.expectRevert(FlowPayCore.StreamAlreadyCreated.selector);
         flowPay.createStream{value: 2 ether}(employee, 1 ether);
     }
 
@@ -91,11 +92,11 @@ contract FlowPayTest {
         _createStream(20 ether, 1 ether);
         vm.warp(block.timestamp + 10);
 
-        vm.expectRevert(FlowPay.Unauthorized.selector);
+        vm.expectRevert(FlowPayCore.Unauthorized.selector);
         vm.prank(outsider);
         flowPay.claimSalary(1 ether);
 
-        vm.expectRevert(FlowPay.InvalidClaimAmount.selector);
+        vm.expectRevert(FlowPayCore.InvalidClaimAmount.selector);
         vm.prank(employee);
         flowPay.claimSalary(100 ether);
 
@@ -134,11 +135,11 @@ contract FlowPayTest {
 
     function testSavingsRateRejectsValuesOutsideFivePercentSteps() public {
         _createStream(2 ether, 1 ether);
-        vm.expectRevert(FlowPay.InvalidSavingsRate.selector);
+        vm.expectRevert(FlowPayCore.InvalidSavingsRate.selector);
         vm.prank(employee);
         flowPay.setSavingsRate(1_000 + 1);
 
-        vm.expectRevert(FlowPay.InvalidSavingsRate.selector);
+        vm.expectRevert(FlowPayCore.InvalidSavingsRate.selector);
         vm.prank(employee);
         flowPay.setSavingsRate(3_500);
     }

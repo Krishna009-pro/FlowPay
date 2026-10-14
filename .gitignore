@@ -9,6 +9,9 @@ contracts/cache/
 contracts/out/build-info/
 contracts/out/FlowPay.sol/
 contracts/out/FlowPay.t.sol/
+contracts/out/FlowPayCore.sol/
+contracts/out/FlowPayFactory.sol/
+contracts/out/FlowPayStream.sol/
 
 # Environment variables
 .env
