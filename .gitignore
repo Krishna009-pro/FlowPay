@@ -4,6 +4,11 @@ node_modules/
 # Production build
 dist/
 dist-ssr/
+.superpowers/
+contracts/cache/
+contracts/out/build-info/
+contracts/out/FlowPay.sol/
+contracts/out/FlowPay.t.sol/
 
 # Environment variables
 .env

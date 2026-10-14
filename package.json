@@ -5,16 +5,39 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "node server/src/start.js",
+    "dev:db": "docker compose up -d postgres",
     "start": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "npm run test:unit && npm run test:contracts",
+    "test:unit": "node --test",
+    "test:api": "node --test server/test/*.test.js",
+    "db:migrate": "node server/src/db/migrate-cli.js",
+    "test:contracts": "forge test --root contracts"
   },
   "dependencies": {
+    "fastify": "^5.12.5",
     "lucide-react": "^0.468.0",
+    "pg": "^8.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "solc": "^0.8.37",
     "viem": "^2.57.4",
     "vite": "^6.0.7"
+  },
+  "optionalDependencies": {
+    "@foundry-rs/forge-darwin-amd64": "^1.7.1",
+    "@foundry-rs/forge-darwin-arm64": "^1.7.1",
+    "@foundry-rs/forge-linux-amd64": "^1.7.1",
+    "@foundry-rs/forge-linux-arm64": "^1.7.1",
+    "@foundry-rs/forge-win32-amd64": "^1.7.1"
+  },
+  "devDependencies": {
+    "solc": "0.8.28"
+  },
+  "overrides": {
+    "solc": {
+      "tmp": "0.2.7"
+    }
   }
 }

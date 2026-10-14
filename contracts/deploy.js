@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createWalletClient, createPublicClient, http, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { readDeploymentPrivateKey } from './deploymentConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,17 +21,14 @@ const monadTestnet = defineChain({
 });
 
 async function main() {
-  const privateKey = process.env.PRIVATE_KEY || process.argv[2];
-  if (!privateKey) {
+  let formattedKey;
+  try {
+    formattedKey = readDeploymentPrivateKey();
+  } catch {
     console.log('Error: PRIVATE_KEY is required.');
-    console.log('Usage in PowerShell:');
-    console.log('  $env:PRIVATE_KEY="0xYourKey"; node contracts/deploy.js');
-    console.log('Or:');
-    console.log('  node contracts/deploy.js 0xYourKey');
+    console.log('Set PRIVATE_KEY in the process environment using a secure wallet/key-management workflow.');
     process.exit(1);
   }
-
-  const formattedKey = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
   const account = privateKeyToAccount(formattedKey);
 
   const publicClient = createPublicClient({
@@ -101,10 +99,9 @@ async function main() {
   );
   console.log('Saved deployment record to: contracts/out/deployedAddress.json');
 
-  // Write/Update .env file
-  const envContent = `VITE_MONAD_RPC_URL=https://testnet-rpc.monad.xyz\nVITE_MONAD_CHAIN_ID=10143\nVITE_FLOWPAY_CONTRACT_ADDRESS=${receipt.contractAddress}\nVITE_FLOWPAY_DEPLOYMENT_BLOCK=${receipt.blockNumber}\n`;
-  fs.writeFileSync(path.resolve(__dirname, '../.env'), envContent);
-  console.log('Saved frontend configuration to: .env\n');
+  console.log('Set these public frontend values manually after verifying the deployment:');
+  console.log(`VITE_FLOWPAY_CONTRACT_ADDRESS=${receipt.contractAddress}`);
+  console.log(`VITE_FLOWPAY_DEPLOYMENT_BLOCK=${receipt.blockNumber}\n`);
 }
 
 main().catch((err) => {
