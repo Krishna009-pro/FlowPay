@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, AlertCircle, ArrowDownToLine, ArrowUpRight, Check, ChevronDown,
@@ -7,18 +7,26 @@ import {
 } from 'lucide-react';
 import { formatEther, isAddress, parseEther } from 'viem';
 import {
-  FLOWPAY_ADDRESS, FLOWPAY_CONFIG_ERROR, MONAD_CHAIN_ID, MONADSCAN_TX_URL,
+  DEPLOYMENT_BLOCK, FLOWPAY_ADDRESS, FLOWPAY_CONFIG_ERROR,
+  FLOWPAY_FACTORY_ADDRESS, FLOWPAY_FACTORY_CONFIG_ERROR, FLOWPAY_FACTORY_DEPLOYMENT_BLOCK,
+  MONAD_CHAIN_ID, MONAD_CONFIG_ERROR, MONADSCAN_TX_URL,
 } from './chain/config.js';
 import {
-  connectWallet, getWalletChainId, readActivity, readStream, submitAction,
+  connectWallet, createFactoryStream, getWalletChainId, isStreamRegistered,
+  loadAccountStreams, readActivity, readStream, registerLegacyStream, submitAction,
   switchToMonadTestnet, waitForAction,
 } from './chain/flowPay.js';
+import { performWalletAction } from './chain/transactionFlow.js';
+import { projectSnapshot } from './chain/projectSnapshot.js';
+import { subscribeWalletEvents } from './chain/walletEvents.js';
+import { emptyActivityState } from './chain/activityState.js';
 import './styles.css';
 
+const PayrollWorkspace = lazy(() => import('./PayrollWorkspace.jsx'));
+
 const MONTH_SECONDS = 30n * 24n * 60n * 60n;
-const BPS = 10_000n;
 const NAV_ITEMS = [
-  ['Overview', LayoutDashboard], ['My salary', Wallet],
+  ['Overview', LayoutDashboard], ['Payroll system', Landmark], ['My salary', Wallet],
   ['Activity', Activity], ['Employer payroll', Landmark],
 ];
 
@@ -48,35 +56,31 @@ function dateTime(timestamp) {
   return timestamp ? new Date(timestamp * 1_000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Time unavailable';
 }
 
-function projectSnapshot(snapshot, blockTimestamp, nowSeconds, allowProjection = true) {
-  if (!snapshot) return null;
-  const elapsed = allowProjection ? BigInt(Math.max(0, nowSeconds - blockTimestamp)) : 0n;
-  const canAccrue = snapshot.streamCreated && !snapshot.paused && !snapshot.underfunded;
-  let newlyVested = canAccrue ? snapshot.ratePerSecond * elapsed : 0n;
-  if (newlyVested > snapshot.availableToVest) newlyVested = snapshot.availableToVest;
-  const savings = (newlyVested * BigInt(snapshot.savingsRateBps) + snapshot.savingsRemainder) / BPS;
-  return {
-    totalVested: snapshot.totalVested + newlyVested,
-    salaryClaimable: snapshot.salaryClaimable + newlyVested - savings,
-    savingsClaimable: snapshot.savingsClaimable + savings,
-    availableToVest: snapshot.availableToVest - newlyVested,
-  };
-}
-
-function roleFor(address, employer, snapshot) {
+function roleFor(address, employer, snapshot, employeeAddress) {
   if (!address) return 'Visitor';
   if (employer && address.toLowerCase() === employer.toLowerCase()) return 'Employer';
-  if (snapshot?.streamCreated && address.toLowerCase() === snapshot.employee.toLowerCase()) return 'Employee';
+  if ((snapshot?.streamCreated && address.toLowerCase() === snapshot.employee.toLowerCase())
+    || (employeeAddress && address.toLowerCase() === employeeAddress.toLowerCase())) return 'Employee';
   return 'Viewer';
 }
 
 function App() {
   const [tab, setTab] = useState('Overview');
   const [wallet, setWallet] = useState(null);
+  const [streamChoices, setStreamChoices] = useState([]);
+  const [selectedStreamAddress, setSelectedStreamAddress] = useState(null);
+  const [streamsLoading, setStreamsLoading] = useState(false);
+  const [streamsError, setStreamsError] = useState('');
+  const [factoryReady, setFactoryReady] = useState(false);
+  const [legacyRegistered, setLegacyRegistered] = useState(false);
+  const [legacyStream, setLegacyStream] = useState(null);
   const [streamData, setStreamData] = useState(null);
   const [activity, setActivity] = useState([]);
+  const [activityStreamAddress, setActivityStreamAddress] = useState(null);
   const [readError, setReadError] = useState('');
+  const [readErrorStreamAddress, setReadErrorStreamAddress] = useState(null);
   const [activityError, setActivityError] = useState('');
+  const [activityErrorStreamAddress, setActivityErrorStreamAddress] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [transaction, setTransaction] = useState(null);
@@ -93,45 +97,164 @@ function App() {
   const [salaryClaimAmount, setSalaryClaimAmount] = useState('');
   const [savingsClaimAmount, setSavingsClaimAmount] = useState('');
   const [draftSavingsRate, setDraftSavingsRate] = useState(1_000);
+  const refreshSequence = useRef(0);
 
-  const snapshot = streamData?.snapshot;
-  const role = roleFor(wallet?.address, streamData?.employer, snapshot);
+  const selectedStream = streamChoices.find((stream) => stream.address.toLowerCase() === selectedStreamAddress?.toLowerCase());
+  const activeStreamAddress = selectedStream?.address;
+  const activeDeploymentBlock = selectedStream?.deploymentBlock;
+  const activeStreamData = streamData?.address?.toLowerCase() === activeStreamAddress?.toLowerCase() ? streamData : null;
+  const snapshot = activeStreamData?.snapshot;
+  const activeReadError = readErrorStreamAddress?.toLowerCase() === activeStreamAddress?.toLowerCase() ? readError : '';
+  const activeActivityError = activityErrorStreamAddress?.toLowerCase() === activeStreamAddress?.toLowerCase() ? activityError : '';
+  const role = roleFor(wallet?.address, activeStreamData?.employer || selectedStream?.employer, snapshot, selectedStream?.employee);
   const networkReady = Boolean(wallet && wallet.chainId === MONAD_CHAIN_ID);
   const live = useMemo(
-    () => projectSnapshot(snapshot, streamData?.blockTimestamp || nowSeconds, nowSeconds, !readError),
-    [snapshot, streamData?.blockTimestamp, nowSeconds, readError],
+    () => projectSnapshot(snapshot, activeStreamData?.blockTimestamp || nowSeconds, nowSeconds, !activeReadError),
+    [snapshot, activeStreamData?.blockTimestamp, nowSeconds, activeReadError],
   );
-  const setupError = FLOWPAY_CONFIG_ERROR || (!FLOWPAY_ADDRESS
-    ? 'Set VITE_FLOWPAY_CONTRACT_ADDRESS and VITE_FLOWPAY_DEPLOYMENT_BLOCK in .env.local after deploying from the fresh employer wallet.'
-    : '');
-  const canWrite = networkReady && !busy && !setupError;
+  const setupError = MONAD_CONFIG_ERROR || (!selectedStream && FLOWPAY_CONFIG_ERROR) || '';
+  const canWrite = networkReady && !busy && !setupError && Boolean(activeStreamAddress);
   const canEmployer = canWrite && role === 'Employer';
   const canEmployee = canWrite && role === 'Employee';
-  const recentActivity = useMemo(() => [...activity].reverse(), [activity]);
+  const canCreateStream = networkReady && !busy && !MONAD_CONFIG_ERROR && !FLOWPAY_FACTORY_CONFIG_ERROR && Boolean(FLOWPAY_FACTORY_ADDRESS) && factoryReady;
+  const canImportLegacy = networkReady && !busy && !MONAD_CONFIG_ERROR && !FLOWPAY_FACTORY_CONFIG_ERROR && Boolean(FLOWPAY_FACTORY_ADDRESS) && factoryReady
+    && Boolean(wallet?.address && legacyStream?.employer?.toLowerCase() === wallet.address.toLowerCase())
+    && Boolean(legacyStream?.created)
+    && !legacyRegistered;
+  const recentActivity = useMemo(() => activityStreamAddress?.toLowerCase() === activeStreamAddress?.toLowerCase()
+    ? [...activity].reverse() : [], [activity, activityStreamAddress, activeStreamAddress]);
   const statusLabel = setupError ? 'Setup required'
-    : readError ? 'Read unavailable'
+    : activeReadError ? 'Read unavailable'
       : !snapshot ? 'Waiting for contract'
         : !snapshot.streamCreated ? 'No stream yet'
           : snapshot.paused ? 'Paused'
             : snapshot.underfunded ? 'Needs funding' : 'Streaming';
 
-  const refresh = useCallback(async () => {
-    if (!FLOWPAY_ADDRESS || FLOWPAY_CONFIG_ERROR) return;
-    setLoading(true);
-    try {
-      setStreamData(await readStream());
+  const refresh = useCallback(async (address = activeStreamAddress, deploymentBlock = activeDeploymentBlock) => {
+    const sequence = ++refreshSequence.current;
+    if (!address) {
+      setStreamData(null);
+      setActivity([]);
+      setActivityStreamAddress(null);
       setReadError('');
+      setReadErrorStreamAddress(null);
+      setActivityError('');
+      setActivityErrorStreamAddress(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setReadError('');
+    setActivityError('');
+    try {
+      const result = await readStream(address);
+      if (sequence !== refreshSequence.current) return;
+      setStreamData(result);
+      setReadError('');
+      setReadErrorStreamAddress(null);
     } catch (error) {
+      if (sequence !== refreshSequence.current) return;
       setReadError(errorMessage(error));
+      setReadErrorStreamAddress(address);
     }
     try {
-      setActivity(await readActivity());
+      const events = await readActivity(address, deploymentBlock);
+      if (sequence !== refreshSequence.current) return;
+      setActivity(events);
+      setActivityStreamAddress(address);
       setActivityError('');
+      setActivityErrorStreamAddress(null);
     } catch (error) {
+      if (sequence !== refreshSequence.current) return;
       setActivityError(errorMessage(error));
+      setActivityErrorStreamAddress(address);
     }
-    setLoading(false);
-  }, []);
+    if (sequence === refreshSequence.current) setLoading(false);
+  }, [activeStreamAddress, activeDeploymentBlock]);
+
+  const loadStreams = useCallback(async (account = wallet?.address) => {
+    setStreamsLoading(true);
+    setStreamsError('');
+    setStreamChoices([]);
+    setSelectedStreamAddress(null);
+    const nextChoices = [];
+    let registeredLegacy = false;
+    let loadError = '';
+    setFactoryReady(false);
+    if (account && FLOWPAY_FACTORY_CONFIG_ERROR) loadError = FLOWPAY_FACTORY_CONFIG_ERROR;
+    if (account && !FLOWPAY_FACTORY_CONFIG_ERROR && FLOWPAY_FACTORY_ADDRESS) {
+      try {
+        const indexed = await loadAccountStreams(account);
+        setFactoryReady(true);
+        const indexedAddresses = [...new Set([...indexed.employerStreams, ...indexed.employeeStreams])];
+        const factoryRecords = [];
+        for (let offset = 0; offset < indexedAddresses.length; offset += 5) {
+          const group = await Promise.all(indexedAddresses.slice(offset, offset + 5).map(async (address) => {
+            try {
+              const data = await readStream(address);
+              const employerMatch = data.employer.toLowerCase() === account.toLowerCase();
+              const employeeMatch = data.snapshot.streamCreated && data.snapshot.employee.toLowerCase() === account.toLowerCase();
+              if (!employerMatch && !employeeMatch) return null;
+              return {
+                address,
+                source: 'factory',
+                deploymentBlock: FLOWPAY_FACTORY_DEPLOYMENT_BLOCK,
+                employer: data.employer,
+                employee: data.snapshot.employee,
+              };
+            } catch (error) {
+              loadError = errorMessage(error);
+              return {
+                address,
+                source: 'factory',
+                deploymentBlock: FLOWPAY_FACTORY_DEPLOYMENT_BLOCK,
+                employer: indexed.employerStreams.some((entry) => entry.toLowerCase() === address.toLowerCase()) ? account : undefined,
+                employee: indexed.employeeStreams.some((entry) => entry.toLowerCase() === address.toLowerCase()) ? account : undefined,
+                unavailable: true,
+              };
+            }
+          }));
+          factoryRecords.push(...group);
+        }
+        nextChoices.push(...factoryRecords.filter(Boolean));
+      } catch (error) {
+        loadError = errorMessage(error);
+        setFactoryReady(false);
+      }
+    }
+
+    if (FLOWPAY_ADDRESS && !FLOWPAY_CONFIG_ERROR) {
+      try {
+        const legacy = await readStream(FLOWPAY_ADDRESS);
+        setLegacyStream({ address: FLOWPAY_ADDRESS, employer: legacy.employer, employee: legacy.snapshot.employee, created: legacy.snapshot.streamCreated });
+        if (account) {
+          const party = [legacy.employer, legacy.snapshot.employee].some((address) => address.toLowerCase() === account.toLowerCase());
+          if (party) nextChoices.push({ address: FLOWPAY_ADDRESS, source: 'legacy', deploymentBlock: DEPLOYMENT_BLOCK, employer: legacy.employer, employee: legacy.snapshot.employee });
+          if (FLOWPAY_FACTORY_ADDRESS && !FLOWPAY_FACTORY_CONFIG_ERROR && legacy.employer.toLowerCase() === account.toLowerCase()) {
+            try { registeredLegacy = await isStreamRegistered(FLOWPAY_ADDRESS); }
+            catch { registeredLegacy = false; }
+          }
+        } else {
+          nextChoices.push({ address: FLOWPAY_ADDRESS, source: 'legacy', deploymentBlock: DEPLOYMENT_BLOCK, employer: legacy.employer, employee: legacy.snapshot.employee });
+        }
+      } catch (error) {
+        setLegacyStream(null);
+        if (!loadError) loadError = errorMessage(error);
+      }
+    } else {
+      setLegacyStream(null);
+      if (!loadError && FLOWPAY_CONFIG_ERROR) loadError = FLOWPAY_CONFIG_ERROR;
+    }
+
+    const unique = [...new Map(nextChoices.map((stream) => [stream.address.toLowerCase(), stream])).values()];
+    setStreamChoices(unique);
+    setLegacyRegistered(registeredLegacy);
+    setStreamsError(loadError);
+    setSelectedStreamAddress((current) => unique.some((stream) => stream.address.toLowerCase() === current?.toLowerCase())
+      ? current
+      : unique[0]?.address || null);
+    setStreamsLoading(false);
+  }, [wallet?.address]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowSeconds(Math.floor(Date.now() / 1_000)), 1_000);
@@ -139,11 +262,14 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!FLOWPAY_ADDRESS || FLOWPAY_CONFIG_ERROR) return undefined;
+    loadStreams(wallet?.address);
+  }, [loadStreams, wallet?.address]);
+
+  useEffect(() => {
     refresh();
-    const timer = window.setInterval(refresh, 12_000);
+    const timer = window.setInterval(() => refresh(), 12_000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, activeStreamAddress, activeDeploymentBlock]);
 
   useEffect(() => {
     if (snapshot) setDraftSavingsRate(Number(snapshot.savingsRateBps));
@@ -163,12 +289,7 @@ function App() {
       else setWallet((current) => current ? { ...current, address: accounts[0] } : current);
     };
     const onChain = (chainId) => setWallet((current) => current ? { ...current, chainId: Number.parseInt(chainId, 16) } : current);
-    provider.on('accountsChanged', onAccounts);
-    provider.on('chainChanged', onChain);
-    return () => {
-      provider.removeListener?.('accountsChanged', onAccounts);
-      provider.removeListener?.('chainChanged', onChain);
-    };
+    return subscribeWalletEvents(provider, { onAccounts, onChain });
   }, []);
 
   async function handleConnect() {
@@ -199,25 +320,22 @@ function App() {
   async function performAction(label, send) {
     setBusy(true);
     setFormError('');
-    setTransaction({ label, status: 'wallet' });
-    let hash;
     try {
-      hash = await send();
-      setTransaction({ label, status: 'pending', hash });
-      const receipt = await waitForAction(hash);
-      if (receipt.status !== 'success') throw new Error('The transaction reverted. No balance was updated.');
-      setTransaction({ label, status: 'confirmed', hash });
-      await refresh();
-      return true;
-    } catch (error) {
-      setTransaction({ label, status: 'error', hash, message: errorMessage(error) });
-      return false;
+      return await performWalletAction({
+        label,
+        send,
+        waitForReceipt: waitForAction,
+        refresh,
+        errorMessage,
+        onTransaction: setTransaction,
+      });
     } finally { setBusy(false); }
   }
 
   async function handleCreateStream(event) {
     event.preventDefault();
     setFormError('');
+    if (!wallet?.walletClient || !canCreateStream) return;
     try {
       if (!isAddress(employeeAddress)) throw new Error('Enter a valid employee wallet address.');
       if (employeeAddress.toLowerCase() === wallet.address.toLowerCase()) throw new Error('The employee wallet must differ from the employer wallet.');
@@ -225,8 +343,57 @@ function App() {
       const funding = parseEther(initialFunding);
       if (rate === 0n) throw new Error('Monthly salary is too small to represent a non-zero per-second rate.');
       if (funding === 0n) throw new Error('Initial funding must be greater than 0 MON.');
-      await performAction('Create salary stream', () => submitAction(wallet.walletClient, 'createStream', [employeeAddress, rate], funding));
-    } catch (error) { setFormError(errorMessage(error)); }
+      setBusy(true);
+      setTransaction({ label: 'Create salary stream', status: 'wallet' });
+      const created = await createFactoryStream(wallet.walletClient, employeeAddress, rate, funding, (hash) => {
+        setTransaction({ label: 'Create salary stream', status: 'pending', hash });
+      });
+      setTransaction({ label: 'Create salary stream', status: 'confirmed', hash: created.hash });
+      await loadStreams(wallet.address);
+      const record = {
+        address: created.streamAddress,
+        source: 'factory',
+        deploymentBlock: FLOWPAY_FACTORY_DEPLOYMENT_BLOCK,
+        employer: wallet.address,
+        employee: employeeAddress,
+      };
+      setStreamChoices((current) => [...current.filter((stream) => stream.address.toLowerCase() !== created.streamAddress.toLowerCase()), record]);
+      setSelectedStreamAddress(created.streamAddress);
+      setStreamData(await readStream(created.streamAddress));
+      setReadError('');
+      setReadErrorStreamAddress(null);
+      setActivity(await readActivity(created.streamAddress, FLOWPAY_FACTORY_DEPLOYMENT_BLOCK));
+      setActivityStreamAddress(created.streamAddress);
+      setActivityError('');
+      setActivityErrorStreamAddress(null);
+      setEmployeeAddress('');
+      setMonthlyRate('');
+      setInitialFunding('');
+      setToast('New salary stream is live');
+    } catch (error) {
+      setFormError(errorMessage(error));
+      setTransaction((current) => ({ ...current, label: 'Create salary stream', status: 'error', message: errorMessage(error) }));
+    } finally { setBusy(false); }
+  }
+
+  async function handleRegisterLegacy() {
+    if (!wallet?.walletClient || !canImportLegacy) return;
+    setBusy(true);
+    setFormError('');
+    setTransaction({ label: 'Import existing stream', status: 'wallet' });
+    try {
+      const imported = await registerLegacyStream(wallet.walletClient, FLOWPAY_ADDRESS, (hash) => {
+        setTransaction({ label: 'Import existing stream', status: 'pending', hash });
+      });
+      setTransaction({ label: 'Import existing stream', status: 'confirmed', hash: imported.hash });
+      await loadStreams(wallet.address);
+      setLegacyRegistered(true);
+      setSelectedStreamAddress(FLOWPAY_ADDRESS);
+      setToast('Existing stream added to your list');
+    } catch (error) {
+      setFormError(errorMessage(error));
+      setTransaction((current) => ({ ...current, label: 'Import existing stream', status: 'error', message: errorMessage(error) }));
+    } finally { setBusy(false); }
   }
 
   async function handleTopUp(event) {
@@ -235,7 +402,7 @@ function App() {
     try {
       const amount = parseEther(topUpAmount);
       if (amount === 0n) throw new Error('Enter a top-up amount greater than 0 MON.');
-      if (await performAction('Add payroll funding', () => submitAction(wallet.walletClient, 'topUp', [], amount))) setTopUpAmount('');
+      if (await performAction('Add payroll funding', () => submitAction(wallet.walletClient, activeStreamAddress, 'topUp', [], amount))) setTopUpAmount('');
     } catch (error) { setFormError(errorMessage(error)); }
   }
 
@@ -248,7 +415,7 @@ function App() {
       if (!available || amount > available) throw new Error('The amount exceeds the current claimable balance.');
       const ok = await performAction(
         kind === 'salary' ? 'Withdraw earned salary' : 'Claim reserved savings',
-        () => submitAction(wallet.walletClient, kind === 'salary' ? 'claimSalary' : 'claimSavings', [amount]),
+        () => submitAction(wallet.walletClient, activeStreamAddress, kind === 'salary' ? 'claimSalary' : 'claimSavings', [amount]),
       );
       if (ok) {
         if (kind === 'salary') setSalaryClaimAmount('');
@@ -274,10 +441,11 @@ function App() {
 
   async function handleSaveRate() {
     if (!snapshot || draftSavingsRate === Number(snapshot.savingsRateBps)) return;
-    await performAction('Update auto-save rate', () => submitAction(wallet.walletClient, 'setSavingsRate', [draftSavingsRate]));
+    await performAction('Update auto-save rate', () => submitAction(wallet.walletClient, activeStreamAddress, 'setSavingsRate', [draftSavingsRate]));
   }
 
-  const heading = tab === 'Employer payroll' ? 'Payroll controls'
+  const heading = tab === 'Payroll system' ? 'India payroll'
+    : tab === 'Employer payroll' ? 'Testnet stream controls'
     : tab === 'My salary' ? 'Your salary'
       : tab === 'Activity' ? 'On-chain activity'
         : 'Your money, in motion';
@@ -287,7 +455,7 @@ function App() {
       <a className="brand" href="#top" onClick={(event) => { event.preventDefault(); setTab('Overview'); }}>
         <span className="brand-mark"><Activity size={19} strokeWidth={2.8} /></span><span>flowpay<span className="brand-dot">.</span></span>
       </a>
-      <div className="workspace-switch"><div className="workspace-avatar">F</div><div className="workspace-copy"><strong>FlowPay payroll</strong><span>Monad Testnet · one stream</span></div><ChevronDown size={15} /></div>
+      <div className="workspace-switch"><div className="workspace-avatar">F</div><div className="workspace-copy"><strong>FlowPay</strong><span>Monad salary streams</span></div><ChevronDown size={15} /></div>
       <div className="nav-label">WORKSPACE</div>
       <nav className="main-nav" aria-label="Main navigation">
         {NAV_ITEMS.map(([name, Icon]) => <button key={name} className={'nav-item ' + (tab === name ? 'active' : '')} onClick={() => setTab(name)} aria-current={tab === name ? 'page' : undefined}>
@@ -304,41 +472,62 @@ function App() {
 
     <main className="main-area" id="top">
       <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{tab}</strong></div>
-        <div className="top-actions"><span className={'network-pill ' + (wallet && !networkReady ? 'network-pill-wrong' : '')}><i />{wallet && !networkReady ? 'Switch to Monad' : 'Monad Testnet · 10143'}</span>
+        <div className="top-actions">{tab === 'Payroll system' ? <span className="network-pill"><i />India · INR</span> : <span className={'network-pill ' + (wallet && !networkReady ? 'network-pill-wrong' : '')}><i />{wallet && !networkReady ? 'Switch to Monad' : 'Monad Testnet · 10143'}</span>}
           {wallet ? <><button className="icon-button" aria-label="Copy wallet address" title="Copy address" onClick={handleCopyAddress}>{copied ? <Check size={16} /> : <Copy size={16} />}</button><div className="top-divider" /><button className="top-avatar" title="Disconnect app" onClick={() => setWallet(null)}>{wallet.address.slice(2, 4).toUpperCase()}</button>{!networkReady && <button className="outline-button" onClick={handleSwitchNetwork}>Switch network</button>}</>
             : <button className="outline-button top-connect" onClick={handleConnect}><Wallet size={15} />Connect wallet</button>}
         </div>
       </header>
       <div className="content">
-        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{heading}<span>.</span></h1><p className="heading-sub">Salary settles in native MON on Monad Testnet.</p></div>
-          <button className="outline-button" onClick={refresh} disabled={loading || !FLOWPAY_ADDRESS}><RefreshCw size={14} className={loading ? 'spin' : ''} />{loading ? 'Refreshing' : 'Refresh'}</button>
+        <div className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" />{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{heading}<span>.</span></h1><p className="heading-sub">{tab === 'Payroll system' ? 'Employer funded, INR denominated, locally simulated.' : 'Salary settles in native MON on Monad Testnet.'}</p></div>
+          {tab !== 'Payroll system' && <button className="outline-button" onClick={() => refresh()} disabled={loading || !activeStreamAddress}><RefreshCw size={14} className={loading ? 'spin' : ''} />{loading ? 'Refreshing' : 'Refresh'}</button>}
         </div>
 
-        {setupError && <section className="notice setup-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Fresh contract required</strong><p>{setupError} Restart this app after updating the local config.</p></div><a href="https://testnet.monadscan.com" target="_blank" rel="noreferrer">MonadScan <ExternalLink size={13} /></a></section>}
-        {wallet && !networkReady && <section className="notice warning-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Wallet is on another network</strong><p>Switch MetaMask to Monad Testnet before making a transaction.</p></div><button className="small-button" onClick={handleSwitchNetwork}>Switch network</button></section>}
-        {readError && FLOWPAY_ADDRESS && <section className="notice error-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Could not read the FlowPay contract</strong><p>{readError}{snapshot ? ' Showing the last confirmed snapshot; the live counter is paused.' : ''}</p></div></section>}
+        {tab !== 'Payroll system' && <section className="stream-switcher">
+          <label htmlFor="active-stream">Active salary stream</label>
+          <select id="active-stream" value={activeStreamAddress || ''} onChange={(event) => setSelectedStreamAddress(event.target.value || null)} disabled={streamsLoading || busy || !streamChoices.length}>
+            {!streamChoices.length && <option value="">{streamsLoading ? 'Finding your streams…' : 'No stream available for this wallet'}</option>}
+            {streamChoices.map((stream) => {
+              const streamRole = roleFor(wallet?.address, stream.employer, { streamCreated: true, employee: stream.employee }, stream.employee);
+              const participant = streamRole === 'Employer' ? 'Employee ' + shortAddress(stream.employee) : 'Employer ' + shortAddress(stream.employer);
+              return <option value={stream.address} key={stream.address}>{streamRole === 'Employer' ? 'Employer payroll' : streamRole === 'Employee' ? 'Your salary' : 'Read only'} · {participant} · {shortAddress(stream.address)}</option>;
+            })}
+          </select>
+          <div className="stream-switcher-meta">
+            <span>{selectedStream ? (selectedStream.source === 'legacy' ? 'Original FlowPay contract' : 'Factory-created stream') : streamsError || 'Connect a wallet to find its streams, or create a new stream.'}</span>
+            <button className="small-button" onClick={() => loadStreams(wallet?.address)} disabled={streamsLoading}><RefreshCw size={13} className={streamsLoading ? 'spin' : ''} />Refresh list</button>
+            <button className="small-button" onClick={() => setTab('Employer payroll')}>New stream <Plus size={13} /></button>
+          </div>
+          {streamsError && <p className="stream-list-error" role="status">{streamsError}</p>}
+        </section>}
+
+        {tab !== 'Payroll system' && setupError && <section className="notice setup-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Fresh contract required</strong><p>{setupError} Restart this app after updating the local config.</p></div><a href="https://testnet.monadscan.com" target="_blank" rel="noreferrer">MonadScan <ExternalLink size={13} /></a></section>}
+        {tab !== 'Payroll system' && wallet && !networkReady && <section className="notice warning-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Wallet is on another network</strong><p>Switch MetaMask to Monad Testnet before making a transaction.</p></div><button className="small-button" onClick={handleSwitchNetwork}>Switch network</button></section>}
+        {activeReadError && activeStreamAddress && <section className="notice error-notice"><span className="notice-icon"><AlertCircle size={17} /></span><div><strong>Could not read selected stream</strong><p>{activeReadError}{snapshot ? ' Showing the last confirmed snapshot; the live counter is paused.' : ''}</p></div></section>}
         {transaction && <section className={'transaction-banner ' + transaction.status}><span className="transaction-icon">{transaction.status === 'confirmed' ? <Check size={16} /> : transaction.status === 'error' ? <AlertCircle size={16} /> : <Clock3 size={16} />}</span>
           <div className="transaction-copy"><strong>{transaction.label} · {transaction.status === 'wallet' ? 'Check MetaMask' : transaction.status === 'pending' ? 'Pending confirmation' : transaction.status === 'confirmed' ? 'Confirmed on Monad' : 'Could not complete'}</strong>
             {transaction.hash && <a href={MONADSCAN_TX_URL(transaction.hash)} target="_blank" rel="noreferrer">{shortAddress(transaction.hash)} · View on MonadScan <ExternalLink size={12} /></a>}{transaction.message && <p>{transaction.message}</p>}</div><button className="dismiss-button" onClick={() => setTransaction(null)} aria-label="Dismiss transaction message"><X size={16} /></button>
         </section>}
         {formError && <section className="inline-error" role="alert"><AlertCircle size={15} />{formError}<button onClick={() => setFormError('')} aria-label="Dismiss error"><X size={14} /></button></section>}
 
+        {tab === 'Payroll system' && <Suspense fallback={<div className="pw-card pw-loading">Opening payroll workspace…</div>}><PayrollWorkspace wallet={wallet} onConnect={handleConnect} /></Suspense>}
         {tab === 'Overview' && <OverviewPage
-          snapshot={snapshot} live={live} streamData={streamData} activity={recentActivity.slice(0, 4)} statusLabel={statusLabel} loading={loading} activityError={activityError} setupError={setupError}
+          snapshot={snapshot} live={live} streamData={activeStreamData} activity={recentActivity.slice(0, 4)} statusLabel={statusLabel} loading={loading} activityError={activeActivityError} setupError={setupError}
           role={role} onClaim={() => role === 'Employee' ? setModal(true) : setTab('Employer payroll')} onActivity={() => setTab('Activity')} onPayroll={() => setTab('Employer payroll')} onMySalary={() => setTab('My salary')}
-          onPause={() => performAction('Pause salary stream', () => submitAction(wallet.walletClient, 'pause'))} onResume={() => performAction('Resume salary stream', () => submitAction(wallet.walletClient, 'resume'))}
+          onPause={() => performAction('Pause salary stream', () => submitAction(wallet.walletClient, activeStreamAddress, 'pause'))} onResume={() => performAction('Resume salary stream', () => submitAction(wallet.walletClient, activeStreamAddress, 'resume'))}
           canEmployer={canEmployer} busy={busy} savingsRate={snapshot ? Number(snapshot.savingsRateBps) : undefined} draftSavingsRate={draftSavingsRate} setDraftSavingsRate={setDraftSavingsRate} onSaveRate={handleSaveRate}
         />}
-        {tab === 'My salary' && <EmployeePage snapshot={snapshot} live={live} role={role} canEmployee={canEmployee} busy={busy} setupError={setupError} readError={readError} loading={loading}
+        {tab === 'My salary' && <EmployeePage snapshot={snapshot} live={live} role={role} canEmployee={canEmployee} busy={busy} setupError={setupError} readError={activeReadError} loading={loading}
           salaryClaimAmount={salaryClaimAmount} setSalaryClaimAmount={setSalaryClaimAmount} savingsClaimAmount={savingsClaimAmount} setSavingsClaimAmount={setSavingsClaimAmount}
           draftSavingsRate={draftSavingsRate} setDraftSavingsRate={setDraftSavingsRate} onSaveRate={handleSaveRate} onClaim={handleClaim} setModal={setModal} />}
-        {tab === 'Employer payroll' && <EmployerPage snapshot={snapshot} live={live} role={role} canEmployer={canEmployer} busy={busy} setupError={setupError} readError={readError} loading={loading}
+        {tab === 'Employer payroll' && <EmployerPage snapshot={snapshot} live={live} role={role} canEmployer={canEmployer} busy={busy} setupError={setupError} readError={activeReadError} loading={loading}
           employeeAddress={employeeAddress} setEmployeeAddress={setEmployeeAddress} monthlyRate={monthlyRate} setMonthlyRate={setMonthlyRate} initialFunding={initialFunding} setInitialFunding={setInitialFunding}
           topUpAmount={topUpAmount} setTopUpAmount={setTopUpAmount} onCreate={handleCreateStream} onTopUp={handleTopUp}
-          onPause={() => performAction('Pause salary stream', () => submitAction(wallet.walletClient, 'pause'))} onResume={() => performAction('Resume salary stream', () => submitAction(wallet.walletClient, 'resume'))} />}
-        {tab === 'Activity' && <ActivityPage events={recentActivity} loading={loading} error={activityError} setupError={setupError} />}
+          onPause={() => performAction('Pause salary stream', () => submitAction(wallet.walletClient, activeStreamAddress, 'pause'))} onResume={() => performAction('Resume salary stream', () => submitAction(wallet.walletClient, activeStreamAddress, 'resume'))}
+          canCreateStream={canCreateStream} canImportLegacy={canImportLegacy} factorySetupError={FLOWPAY_FACTORY_CONFIG_ERROR || (!FLOWPAY_FACTORY_ADDRESS ? 'Deploy the factory and set its address and deployment block to create additional streams.' : !factoryReady ? (streamsLoading ? 'Checking factory code on Monad Testnet…' : streamsError || 'The configured factory is not available on Monad Testnet.') : '')}
+          onRegisterLegacy={handleRegisterLegacy} streamAddress={activeStreamAddress} legacyAvailable={Boolean(legacyStream?.created && wallet?.address && legacyStream.employer.toLowerCase() === wallet.address.toLowerCase() && !legacyRegistered)} />}
+        {tab === 'Activity' && <ActivityPage events={recentActivity} loading={loading} error={activeActivityError} setupError={setupError} />}
 
-        <footer className="footer"><span><ShieldCheck size={13} />Balances come from the configured contract.</span><span>Counter projection is capped by confirmed funding.</span><a href={FLOWPAY_ADDRESS ? 'https://testnet.monadscan.com/address/' + FLOWPAY_ADDRESS : 'https://testnet.monadscan.com'} target="_blank" rel="noreferrer">{FLOWPAY_ADDRESS ? 'Open contract on MonadScan' : 'MonadScan'} <ExternalLink size={11} /></a></footer>
+        {tab !== 'Payroll system' && <footer className="footer"><span><ShieldCheck size={13} />Balances come from the selected contract.</span><span>Counter projection is capped by confirmed funding.</span><a href={activeStreamAddress ? 'https://testnet.monadscan.com/address/' + activeStreamAddress : 'https://testnet.monadscan.com'} target="_blank" rel="noreferrer">{activeStreamAddress ? 'Open stream on MonadScan' : 'MonadScan'} <ExternalLink size={11} /></a></footer>}
       </div>
     </main>
 
@@ -393,10 +582,8 @@ function OverviewPage({ snapshot, live, streamData, activity, statusLabel, loadi
         <div className="savings-foot"><ShieldCheck size={14} /><span>Changes apply to future vesting only.</span><button onClick={onMySalary}>Open salary</button></div>
       </article>
       <article className="panel activity-panel"><div className="panel-heading"><div><h2>Recent activity</h2><p>Events read from the FlowPay contract</p></div><button className="filter-button" onClick={onActivity}>View all <ArrowUpRight size={14} /></button></div>
-        {setupError ? <EmptyState compact title="Fresh contract needed" body="Configure the new deployment to load activity." />
-          : activityError ? <EmptyState compact title="Activity unavailable" body={activityError} />
-            : activity.length ? <div className="activity-list">{activity.map((entry) => <ActivityRow key={entry.transactionHash + entry.name} entry={entry} />)}</div>
-              : <EmptyState compact loading={loading} title={loading ? 'Reading Monad Testnet' : 'No activity yet'} body={loading ? 'Checking confirmed FlowPay events.' : 'Confirmed contract actions will appear here.'} />}
+        {activity.length ? <div className="activity-list">{activity.map((entry) => <ActivityRow key={entry.transactionHash + entry.name} entry={entry} />)}</div>
+          : <ActivityEmptyState setupError={setupError} error={activityError} loading={loading} compact />}
         <button className="view-all" onClick={onActivity}>View all activity <ArrowUpRight size={14} /></button>
       </article>
     </section>
@@ -431,39 +618,49 @@ function EmployeePage({ snapshot, live, role, canEmployee, busy, setupError, rea
   </div>;
 }
 
-function EmployerPage({ snapshot, live, role, canEmployer, busy, setupError, readError, loading, employeeAddress, setEmployeeAddress, monthlyRate, setMonthlyRate, initialFunding, setInitialFunding, topUpAmount, setTopUpAmount, onCreate, onTopUp, onPause, onResume }) {
+function EmployerPage({ snapshot, live, role, canEmployer, canCreateStream, canImportLegacy, legacyAvailable, factorySetupError, busy, setupError, readError, loading, employeeAddress, setEmployeeAddress, monthlyRate, setMonthlyRate, initialFunding, setInitialFunding, topUpAmount, setTopUpAmount, onCreate, onTopUp, onPause, onResume, onRegisterLegacy, streamAddress }) {
+  const createPanel = <section className="panel form-panel"><div className="panel-heading"><div><h2>New employee stream</h2><p>Create one independently funded on-chain stream for each employee.</p></div><span className="mini-icon"><Plus size={16} /></span></div>
+    <form className="onchain-form" onSubmit={onCreate}><label htmlFor="employee-address">Employee wallet address</label><input id="employee-address" type="text" autoComplete="off" spellCheck="false" value={employeeAddress} onChange={(event) => setEmployeeAddress(event.target.value)} placeholder="0x…" disabled={!canCreateStream || busy} />
+      <div className="two-fields"><div><label htmlFor="monthly-rate">Monthly salary</label><div className="plain-input"><input id="monthly-rate" type="number" min="0" step="any" value={monthlyRate} onChange={(event) => setMonthlyRate(event.target.value)} placeholder="0.00" disabled={!canCreateStream || busy} /><span>MON</span></div></div>
+        <div><label htmlFor="initial-funding">Initial funding</label><div className="plain-input"><input id="initial-funding" type="number" min="0" step="any" value={initialFunding} onChange={(event) => setInitialFunding(event.target.value)} placeholder="0.00" disabled={!canCreateStream || busy} /><span>MON</span></div></div></div>
+      <button className="confirm-withdraw" type="submit" disabled={!canCreateStream || busy}><Plus size={15} />Create and fund stream</button>
+    </form>
+    {factorySetupError ? <p className="inline-copy">{factorySetupError}</p> : !canCreateStream ? <p className="inline-copy">Connect a wallet on Monad Testnet to create a stream.</p> : null}
+    {legacyAvailable && <div className="legacy-import"><div><strong>Original FlowPay stream</strong><span>Register it in the new list without moving its funds.</span></div><button className="small-button" onClick={onRegisterLegacy} disabled={!canImportLegacy || busy}>Import <ArrowUpRight size={13} /></button></div>}
+  </section>;
+
   if (!snapshot || !snapshot.streamCreated) return <div className="lower-grid action-grid">
-    <section className="panel form-panel"><div className="panel-heading"><div><h2>Create salary stream</h2><p>One employee per contract. Check the address before confirming.</p></div><span className="mini-icon"><Plus size={16} /></span></div>
-      <form className="onchain-form" onSubmit={onCreate}><label htmlFor="employee-address">Employee wallet address</label><input id="employee-address" type="text" autoComplete="off" spellCheck="false" value={employeeAddress} onChange={(event) => setEmployeeAddress(event.target.value)} placeholder="0x…" disabled={!canEmployer || busy} />
-        <div className="two-fields"><div><label htmlFor="monthly-rate">Monthly salary</label><div className="plain-input"><input id="monthly-rate" type="number" min="0" step="any" value={monthlyRate} onChange={(event) => setMonthlyRate(event.target.value)} placeholder="0.00" disabled={!canEmployer || busy} /><span>MON</span></div></div>
-          <div><label htmlFor="initial-funding">Initial funding</label><div className="plain-input"><input id="initial-funding" type="number" min="0" step="any" value={initialFunding} onChange={(event) => setInitialFunding(event.target.value)} placeholder="0.00" disabled={!canEmployer || busy} /><span>MON</span></div></div></div>
-        <button className="confirm-withdraw" type="submit" disabled={!canEmployer || busy}><Plus size={15} />Create and fund stream</button>
-      </form><RoleHint role={role} required="Employer" />{setupError && <p className="inline-copy">{setupError}</p>}{readError && <p className="inline-copy error-copy">{readError}</p>}{loading && !setupError && !readError && <p className="inline-copy">Reading Monad Testnet…</p>}
-    </section>
-    <aside className="panel health-panel"><div className="panel-heading"><div><h2>How funding works</h2><p>Native MON stays in the contract until vested or claimed.</p></div><span className="mini-icon"><ShieldCheck size={16} /></span></div>
-      <div className="explainer-row"><span>01</span><p>Choose an employee and monthly rate.</p></div><div className="explainer-row"><span>02</span><p>Fund the stream with testnet MON.</p></div><div className="explainer-row"><span>03</span><p>Pause or add funding as needed.</p></div></aside>
+    {createPanel}
+    <aside className="panel health-panel"><div className="panel-heading"><div><h2>How funding works</h2><p>Each employee has a separate MON contract. The factory does not hold salary funds.</p></div><span className="mini-icon"><ShieldCheck size={16} /></span></div>
+      <div className="explainer-row"><span>01</span><p>Enter the employee wallet and monthly salary.</p></div><div className="explainer-row"><span>02</span><p>Fund their new stream in the same transaction.</p></div><div className="explainer-row"><span>03</span><p>Select streams above to manage payroll separately.</p></div>
+      {setupError && <p className="inline-copy error-copy">{setupError}</p>}{readError && <p className="inline-copy error-copy">{readError}</p>}{loading && !setupError && !readError && <p className="inline-copy">Reading Monad Testnet…</p>}
+    </aside>
   </div>;
 
-  return <div className="lower-grid action-grid">
-    <section className="panel form-panel"><div className="panel-heading"><div><h2>Employer controls</h2><p>Actions require the wallet that deployed this contract.</p></div><span className="funding-status"><span />{snapshot.paused ? 'Paused' : snapshot.underfunded ? 'Needs funds' : 'Active'}</span></div>
+  return <div className="lower-grid action-grid multi-stream-grid">
+    {createPanel}
+    <section className="panel form-panel"><div className="panel-heading"><div><h2>Selected stream controls</h2><p>Employer actions require this stream’s employer wallet.</p></div><span className="funding-status"><span />{snapshot.paused ? 'Paused' : snapshot.underfunded ? 'Needs funds' : 'Active'}</span></div>
       <div className="detail-list"><Detail label="Employee" value={snapshot.employee} mono /><Detail label="Monthly salary" value={formatMon(snapshot.ratePerSecond * MONTH_SECONDS, 4) + ' MON'} /><Detail label="Contract balance" value={formatMon(snapshot.contractBalance) + ' MON'} /><Detail label="Unvested funding" value={formatMon(live?.availableToVest) + ' MON'} /><Detail label="Salary claimed" value={formatMon(snapshot.salaryClaimed) + ' MON'} /><Detail label="Savings claimed" value={formatMon(snapshot.savingsClaimed) + ' MON'} /></div>
       <form className="onchain-form top-up-form" onSubmit={onTopUp}><label htmlFor="topup-amount">Add payroll funding</label><div className="amount-input"><span>MON</span><input id="topup-amount" type="number" min="0" step="any" value={topUpAmount} onChange={(event) => setTopUpAmount(event.target.value)} placeholder="0.00" disabled={!canEmployer || busy} /><button type="submit" disabled={!canEmployer || busy}><Plus size={14} />Add</button></div></form>
       <div className="control-row">{snapshot.paused ? <button className="confirm-withdraw" onClick={onResume} disabled={!canEmployer || busy}><Play size={15} />Resume stream</button> : <button className="pause-button" onClick={onPause} disabled={!canEmployer || busy}><Pause size={15} />Pause stream</button>}</div><RoleHint role={role} required="Employer" />
     </section>
     <aside className="panel health-panel"><div className="panel-heading"><div><h2>Stream status</h2><p>{snapshot.paused ? 'Accrual is paused; vested salary remains claimable.' : snapshot.underfunded ? 'All current funding has vested. Top up to continue.' : 'Salary accrues against the MON held in this contract.'}</p></div><span className="mini-icon"><Activity size={16} /></span></div>
       <div className="health-number"><span>Auto-save rate</span><strong>{Number(snapshot.savingsRateBps) / 100}%</strong></div><div className="health-number"><span>Total vested</span><strong>{formatMon(live?.totalVested)} MON</strong></div><div className="health-number"><span>Salary claimable</span><strong>{formatMon(live?.salaryClaimable)} MON</strong></div>
-      {FLOWPAY_ADDRESS && <a className="contract-link" href={'https://testnet.monadscan.com/address/' + FLOWPAY_ADDRESS} target="_blank" rel="noreferrer">View contract <ExternalLink size={13} /></a>}
+      {streamAddress && <a className="contract-link" href={'https://testnet.monadscan.com/address/' + streamAddress} target="_blank" rel="noreferrer">View selected stream <ExternalLink size={13} /></a>}
     </aside>
   </div>;
 }
 
 function ActivityPage({ events, loading, error, setupError }) {
   return <section className="panel activity-panel full-activity"><div className="panel-heading"><div><h2>Recent activity</h2><p>Decoded from confirmed FlowPay contract events.</p></div><span className="network-pill"><i />Monad Testnet</span></div>
-    {setupError ? <EmptyState title="Fresh contract required" body="Configure the new deployment address to read activity." />
-      : error ? <EmptyState title="Activity unavailable" body={error} />
-        : events.length ? <div className="activity-list">{events.map((entry) => <ActivityRow key={entry.transactionHash + entry.name} entry={entry} />)}</div>
-          : <EmptyState loading={loading} title={loading ? 'Reading Monad Testnet' : 'No contract events yet'} body={loading ? 'Loading confirmed events from the deployment block.' : 'Confirmed actions will appear after the first contract transaction.'} />}
+    {events.length ? <div className="activity-list">{events.map((entry) => <ActivityRow key={entry.transactionHash + entry.name} entry={entry} />)}</div>
+      : <ActivityEmptyState setupError={setupError} error={error} loading={loading} />}
   </section>;
+}
+
+function ActivityEmptyState({ setupError, error, loading, compact = false }) {
+  const state = emptyActivityState({ setupError, error, loading });
+  return <EmptyState compact={compact} loading={!setupError && !error && loading} title={state.title} body={state.body} />;
 }
 
 function ActivityRow({ entry }) {
